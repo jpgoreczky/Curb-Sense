@@ -59,6 +59,7 @@ jobs:
         with:
           context: apps/api
           push: true
+          platforms: linux/arm64
           provenance: false
           sbom: false
           tags: |
