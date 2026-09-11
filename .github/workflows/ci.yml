@@ -1,0 +1,180 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  api:
+    name: API — lint, test, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Test (pytest)
+        run: pytest
+
+      - name: Set image tag
+        id: meta
+        run: echo "tag=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        if: github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        if: github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/curb-sense-api:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/curb-sense-api:latest
+
+      - name: Build image (validation only, PRs)
+        if: github.ref != 'refs/heads/main'
+        run: docker build -t curb-sense-api:ci .
+
+  mobile:
+    name: Mobile — lint, test, typecheck
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: apps/mobile/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Test (jest)
+        run: npm test -- --ci
+
+      - name: Typecheck (build validation)
+        run: npm run typecheck
+
+  deploy-staging:
+    name: Deploy — staging
+    needs: api
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: non-prod
+    steps:
+      - name: Deploy to staging VM
+        env:
+          HOST: ${{ secrets.HOST }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
+          IMAGE_TAG: ${{ needs.api.outputs.image_tag }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key ubuntu@"$HOST" "cat > ~/.env" <<EOF
+          SUPABASE_URL=$SUPABASE_URL
+          SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY
+          DATABASE_URL=$DATABASE_URL
+          AI_VISION_API_KEY=
+          EOF
+
+          ssh -i ~/.ssh/deploy_key ubuntu@"$HOST" "
+            echo '${{ secrets.GHCR_PAT }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin &&
+            docker pull ghcr.io/${{ github.repository_owner }}/curb-sense-api:$IMAGE_TAG &&
+            docker stop curb-sense-api || true &&
+            docker rm curb-sense-api || true &&
+            docker run -d --name curb-sense-api --restart unless-stopped \
+              --env-file ~/.env -p 8000:8000 \
+              ghcr.io/${{ github.repository_owner }}/curb-sense-api:$IMAGE_TAG
+          "
+
+          ssh -i ~/.ssh/deploy_key ubuntu@"$HOST" "
+            docker pull ghcr.io/${{ github.repository_owner }}/curb-sense-api:$IMAGE_TAG &&
+            docker stop curb-sense-api || true &&
+            docker rm curb-sense-api || true &&
+            docker run -d --name curb-sense-api --restart unless-stopped \
+              --env-file ~/.env -p 8000:8000 \
+              ghcr.io/${{ github.repository_owner }}/curb-sense-api:$IMAGE_TAG
+          "
+
+  deploy-production:
+    name: Deploy — production
+    needs: [api, deploy-staging]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Deploy to production VM
+        env:
+          HOST: ${{ secrets.HOST }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MAPBOX_TOKEN: ${{ secrets.MAPBOX_TOKEN }}
+          IMAGE_TAG: ${{ needs.api.outputs.image_tag }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts
+
+          ssh -i ~/.ssh/deploy_key ubuntu@"$HOST" "cat > ~/.env" <<EOF
+          SUPABASE_URL=$SUPABASE_URL
+          SUPABASE_SERVICE_ROLE_KEY=$SUPABASE_SERVICE_ROLE_KEY
+          DATABASE_URL=$DATABASE_URL
+          AI_VISION_API_KEY=
+          EOF
+
+          ssh -i ~/.ssh/deploy_key ubuntu@"$HOST" "
+            echo '${{ secrets.GHCR_PAT }}' | docker login ghcr.io -u ${{ github.actor }} --password-stdin &&
+            docker pull ghcr.io/${{ github.repository_owner }}/curb-sense-api:$IMAGE_TAG &&
+            docker stop curb-sense-api || true &&
+            docker rm curb-sense-api || true &&
+            docker run -d --name curb-sense-api --restart unless-stopped \
+              --env-file ~/.env -p 8000:8000 \
+              ghcr.io/${{ github.repository_owner }}/curb-sense-api:$IMAGE_TAG
+          "
+          
+          ssh -i ~/.ssh/deploy_key ubuntu@"$HOST" "
+            docker pull ghcr.io/${{ github.repository_owner }}/curb-sense-api:$IMAGE_TAG &&
+            docker stop curb-sense-api || true &&
+            docker rm curb-sense-api || true &&
+            docker run -d --name curb-sense-api --restart unless-stopped \
+              --env-file ~/.env -p 8000:8000 \
+              ghcr.io/${{ github.repository_owner }}/curb-sense-api:$IMAGE_TAG
+          "
