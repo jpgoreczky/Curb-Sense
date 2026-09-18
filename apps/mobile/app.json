@@ -31,6 +31,9 @@
         "projectId": "27825b8e-e9b3-4058-850d-2dc58f353304"
       }
     },
-    "owner": "jpgoreczky"
+    "owner": "jpgoreczky",
+    "plugins": [
+      "expo-status-bar"
+    ]
   }
 }
