@@ -15,6 +15,10 @@ jobs:
     defaults:
       run:
         working-directory: apps/api
+    env:
+      SUPABASE_URL: "https://placeholder.supabase.co"
+      SUPABASE_SERVICE_ROLE_KEY: "placeholder-key-for-ci-import-only"
+      DATABASE_URL: "postgresql://user:pass@localhost:5432/placeholder"
     outputs:
       image_tag: ${{ steps.meta.outputs.tag }}
     steps:
