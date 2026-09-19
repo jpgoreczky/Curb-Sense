@@ -1,5 +1,5 @@
 from geoalchemy2 import Geography
-from sqlalchemy import Column, MetaData, Table, DateTime, Numeric, SmallInteger, String
+from sqlalchemy import Column, MetaData, Table, DateTime, SmallInteger, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 metadata = MetaData()
