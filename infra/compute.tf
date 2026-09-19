@@ -30,7 +30,7 @@ resource "oci_core_instance" "prod" {
   }
 
   metadata = {
-    ssh_authorized_keys = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPna2OVmjuI/xUtWyAbmr/W74gaU5sEkUp6XcVVSJBNy curb-sense-infra"
+    ssh_authorized_keys = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF8QjOWgKWeYkbQwGJTmawDaD6+IVxxURfjS1NjV9le2 curb-sense-infra"
     user_data           = base64encode(file("${path.module}/cloud-init.yaml"))
   }
 }
@@ -57,7 +57,7 @@ resource "oci_core_instance" "staging" {
   }
 
   metadata = {
-    ssh_authorized_keys = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPna2OVmjuI/xUtWyAbmr/W74gaU5sEkUp6XcVVSJBNy curb-sense-infra"
+    ssh_authorized_keys = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF8QjOWgKWeYkbQwGJTmawDaD6+IVxxURfjS1NjV9le2 curb-sense-infra"
     user_data           = base64encode(file("${path.module}/cloud-init.yaml"))
   }
 }
