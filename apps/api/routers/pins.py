@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from auth import get_current_user_id
 from db import get_db_session
 from schemas import ConflictResolveRequest, PinCreateRequest, PinDetail, PinSummary, ReviewCreateRequest
 from services.ingestion import ingest_tier2, resolve_conflict
@@ -39,10 +40,14 @@ async def get_pin(pin_id: str, session: AsyncSession = Depends(get_db_session)):
 
 
 @router.post("/pins")
-async def create_pin(payload: PinCreateRequest, session: AsyncSession = Depends(get_db_session)):
-    result = await ingest_tier2(
+async def create_pin(
+    payload: PinCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    user_id: str = Depends(get_current_user_id),
+):
+    return await ingest_tier2(
         session,
-        user_id=str(payload.user_id),
+        user_id=user_id,
         lon=payload.lon,
         lat=payload.lat,
         status=payload.status,
@@ -52,23 +57,28 @@ async def create_pin(payload: PinCreateRequest, session: AsyncSession = Depends(
         confirmed_fields=payload.confirmed_fields,
         confidence_score=payload.confidence_score,
     )
-    return result
 
 
 @router.post("/pins/{pin_id}/reviews")
 async def create_review(
-    pin_id: str, payload: ReviewCreateRequest, session: AsyncSession = Depends(get_db_session)
+    pin_id: str,
+    payload: ReviewCreateRequest,
+    session: AsyncSession = Depends(get_db_session),
+    user_id: str = Depends(get_current_user_id),
 ):
     _validate_uuid(pin_id, "pin_id")
     existing = await get_pin_detail(session, pin_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Pin not found")
-    return await add_review(session, pin_id, str(payload.user_id), payload.review_text)
+    return await add_review(session, pin_id, user_id, payload.review_text)
 
 
 @router.post("/conflicts/{conflict_id}/resolve")
 async def resolve_conflict_route(
-    conflict_id: str, payload: ConflictResolveRequest, session: AsyncSession = Depends(get_db_session)
+    conflict_id: str,
+    payload: ConflictResolveRequest,
+    session: AsyncSession = Depends(get_db_session),
+    user_id: str = Depends(get_current_user_id),
 ):
     _validate_uuid(conflict_id, "conflict_id")
     try:
@@ -76,13 +86,9 @@ async def resolve_conflict_route(
             session,
             conflict_id=conflict_id,
             resolution=payload.resolution,
-            resolved_by=str(payload.resolved_by),
+            resolved_by=user_id,
             resulting_status=payload.resulting_status,
             resulting_restrictions=payload.resulting_restrictions,
         )
     except Exception as e:
-        # NOTE: broad catch is temporary — resolve_conflict currently raises
-        # a bare scalar_one() error if conflict_id doesn't exist, rather than
-        # a clean domain exception. Worth revisiting for a proper 404 vs 500
-        # distinction once error handling gets a real pass.
         raise HTTPException(status_code=400, detail=str(e))

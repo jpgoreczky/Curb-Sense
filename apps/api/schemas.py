@@ -27,7 +27,6 @@ class PinDetail(PinSummary):
 
 
 class PinCreateRequest(BaseModel):
-    user_id: UUID  # TODO(BACK-2.5): derive from auth token, not request body
     lon: float
     lat: float
     status: str
@@ -39,12 +38,10 @@ class PinCreateRequest(BaseModel):
 
 
 class ReviewCreateRequest(BaseModel):
-    user_id: UUID  # TODO(BACK-2.5): derive from auth token, not request body
     review_text: str
 
 
 class ConflictResolveRequest(BaseModel):
-    resolved_by: UUID  # TODO(BACK-2.5): derive from auth token, not request body
     resolution: str
     resulting_status: str
     resulting_restrictions: dict

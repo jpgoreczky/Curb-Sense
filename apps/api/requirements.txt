@@ -4,3 +4,4 @@ pydantic-settings==2.5.2
 sqlalchemy[asyncio]==2.0.36
 asyncpg==0.30.0
 geoalchemy2==0.15.2
+PyJWT[crypto]==2.9.0
