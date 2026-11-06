@@ -13,15 +13,16 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.curbsense"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.anonymous.curbsense"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -33,7 +34,9 @@
     },
     "owner": "jpgoreczky",
     "plugins": [
-      "expo-status-bar"
+      "expo-status-bar",
+      "expo-dev-client",
+      "@rnmapbox/maps"
     ]
   }
 }
