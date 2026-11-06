@@ -13,6 +13,9 @@ Rules:
   serialized with lock_area(); the matched location row is locked FOR UPDATE.
 - Tier 3 is never silently overwritten. A conflict resolves only by community
   quorum (cast_conflict_vote) or an explicit ops override (resolve_conflict).
+- A resolution survives later feed syncs: parking_locations.feed_claim records
+  what the feed last asserted, so an unchanged re-sync keeps the resolved
+  answer and a changed rule that still disagrees re-opens a conflict.
 - Radii, decay window and quorum rules come from the engine_settings row.
 """
 
@@ -110,12 +113,18 @@ async def _lock_location(session: AsyncSession, location_id: Any) -> dict[str, A
                 parking_locations.c.tier,
                 parking_locations.c.status,
                 parking_locations.c.restrictions,
+                parking_locations.c.feed_claim,
             )
             .where(parking_locations.c.id == location_id)
             .with_for_update()
         )
     ).first()
     return dict(row._mapping) if row else None
+
+
+def _claim(status: str, restrictions: dict | None) -> dict[str, Any]:
+    """Canonical {status, restrictions} pair, as stored in feed_claim."""
+    return {"status": status, "restrictions": restrictions or {}}
 
 
 def validate_tier1_geometry(geometry: dict, curb_side: str | None) -> None:
@@ -155,12 +164,14 @@ async def ingest_tier1(
     """
     validate_tier1_geometry(geometry, curb_side)
     geog = _geojson_geog(geometry)
+    claim = _claim(status, restrictions)
     descriptive = {
         "curb_side": curb_side,
         "street_name": street_name,
         "from_street": from_street,
         "to_street": to_street,
         "osm_way_id": osm_way_id,
+        "feed_claim": claim,
     }
 
     async with _unit_of_work(session):
@@ -214,22 +225,41 @@ async def ingest_tier1(
             result = {"action": "created", "id": location_id, "tier": 1}
 
         elif existing["tier"] == 1:
-            # Later municipal sync refreshes the baseline, geometry included.
             location_id = existing["id"]
+            current = _claim(existing["status"], existing["restrictions"])
+            prior_claim = existing["feed_claim"]
+            # Geometry, names, feed link and feed_claim always follow the feed.
             await session.execute(
                 update(parking_locations)
                 .where(parking_locations.c.id == location_id)
-                .values(
-                    geom=geog,
-                    status=status,
-                    restrictions=restrictions,
-                    last_verified_at=now,
-                    municipal_feed_record_id=feed_id,
-                    updated_at=now,
-                    **descriptive,
-                )
+                .values(geom=geog, municipal_feed_record_id=feed_id, updated_at=now, **descriptive)
             )
-            result = {"action": "updated", "id": location_id, "tier": 1}
+            resolved_against_feed = prior_claim is not None and current != prior_claim
+
+            if not resolved_against_feed or claim == current:
+                # Normal sync: the row mirrors the feed (or the feed now agrees
+                # with a resolved answer). Refresh the baseline.
+                await session.execute(
+                    update(parking_locations)
+                    .where(parking_locations.c.id == location_id)
+                    .values(status=status, restrictions=restrictions, last_verified_at=now)
+                )
+                result = {"action": "updated", "id": location_id, "tier": 1}
+            elif claim == prior_claim:
+                # The feed repeats the claim a conflict already rejected.
+                # Keep the resolved answer; no new information.
+                result = {"action": "kept_resolved", "id": location_id, "tier": 1}
+            else:
+                # The city changed its rule, and it still disagrees with the
+                # resolved answer. Never overwrite silently: re-open.
+                conflict_id = await _raise_conflict(
+                    session,
+                    location_id=location_id,
+                    tier1_snapshot={**claim, "source": "municipal_feed"},
+                    tier2_snapshot={**current, "source": "resolved_conflict"},
+                    now=now,
+                )
+                result = {"action": "conflict_raised", "id": location_id, "conflict_id": conflict_id, "tier": 3}
 
         elif existing["tier"] == 2:
             location_id = existing["id"]
@@ -269,6 +299,11 @@ async def ingest_tier1(
         else:
             raise ValueError(f"Unexpected tier value: {existing['tier']}")
 
+        # Every path records what the feed asserted, so a later resolution
+        # against it can be told apart from an unchanged re-sync.
+        await session.execute(
+            update(parking_locations).where(parking_locations.c.id == location_id).values(feed_claim=claim)
+        )
         await session.execute(
             update(municipal_feed_records)
             .where(municipal_feed_records.c.id == feed_id)

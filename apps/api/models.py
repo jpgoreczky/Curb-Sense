@@ -32,6 +32,7 @@ parking_locations = Table(
     Column("restrictions", JSONB),
     Column("last_verified_at", DateTime(timezone=True)),
     Column("municipal_feed_record_id", UUID),
+    Column("feed_claim", JSONB),  # last {status, restrictions} a feed asserted
     Column("display_priority", SmallInteger),  # generated, read-only
     Column("created_at", DateTime(timezone=True)),
     Column("updated_at", DateTime(timezone=True)),

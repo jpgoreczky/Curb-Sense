@@ -18,6 +18,7 @@ from services.ingestion import (
     cast_conflict_vote,
     ingest_tier1,
     ingest_tier2,
+    resolve_conflict,
 )
 from services.parking import get_pin_detail, get_pins_in_bbox
 
@@ -201,3 +202,61 @@ async def test_reversed_feed_segment_matches_same_curb(session):
 
     assert second == first
     assert await _count(session, parking_locations) == 1
+
+
+async def _resolve_for_community(session, make_user) -> str:
+    """Feed says restricted, community says available, quorum sides with community."""
+    seg_id, conflict_id = await _open_conflict(session, make_user)
+    for _ in range(3):
+        await cast_conflict_vote(session, conflict_id=conflict_id, user_id=await make_user(), supports="tier2")
+    return seg_id
+
+
+async def test_unchanged_feed_resync_keeps_community_resolution(session, make_user):
+    seg_id = await _resolve_for_community(session, make_user)
+
+    resync = await _segment(session, "left", "restricted", "seg-1")  # same feed record, same claim
+    detail = await get_pin_detail(session, seg_id)
+
+    assert resync == seg_id
+    assert (detail["tier"], detail["status"], detail["open_conflict"]) == (1, "available", None)
+
+
+async def test_feed_agreeing_with_resolution_then_changing_is_a_normal_update(session, make_user):
+    seg_id = await _resolve_for_community(session, make_user)
+
+    await _segment(session, "left", "available", "seg-1")  # city now agrees
+    await _segment(session, "left", "restricted", "seg-1")  # later genuine rule change
+    detail = await get_pin_detail(session, seg_id)
+
+    assert (detail["tier"], detail["status"], detail["open_conflict"]) == (1, "restricted", None)
+
+
+async def test_changed_feed_rule_against_resolution_reopens_conflict(session, make_user):
+    seg_id = await _resolve_for_community(session, make_user)
+
+    result = await ingest_tier1(
+        session, source_type="permit", external_id="seg-1", payload={}, geometry=STREET,
+        status="conditional", restrictions={"max_hours": 2}, curb_side="left", street_name="Test St",
+    )
+    detail = await get_pin_detail(session, seg_id)
+
+    assert result["action"] == "conflict_raised"
+    assert detail["tier"] == 3
+    assert detail["status"] == "available"  # resolved answer stays visible until re-resolved
+    assert detail["open_conflict"]["tier1_snapshot"]["status"] == "conditional"
+    assert detail["open_conflict"]["tier2_snapshot"]["status"] == "available"
+    assert await _count(session, conflicts, conflicts.c.status == "open") == 1
+
+
+async def test_unchanged_feed_resync_keeps_ops_override(session, make_user):
+    seg_id, conflict_id = await _open_conflict(session, make_user)
+    await resolve_conflict(
+        session, conflict_id=conflict_id, resolution="sign photographed by ops",
+        resolved_by=await make_user(), resulting_status="conditional", resulting_restrictions={"max_hours": 2},
+    )
+
+    await _segment(session, "left", "restricted", "seg-1")
+    detail = await get_pin_detail(session, seg_id)
+
+    assert (detail["tier"], detail["status"], detail["restrictions"]) == (1, "conditional", {"max_hours": 2})
