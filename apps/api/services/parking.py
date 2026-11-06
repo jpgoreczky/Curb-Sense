@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from geoalchemy2 import Geography
-from sqlalchemy import cast, func, insert, select
+from sqlalchemy import cast, func, insert, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from models import community_reports, conflicts, pin_features
@@ -47,6 +47,47 @@ async def get_pins_in_bbox(
     )
     result = await session.execute(stmt)
     return [dict(row._mapping) for row in result]
+
+
+# Clustering applies below this zoom; at or above it the app renders raw
+# features from get_pins_in_bbox. Mirrored by the mobile app (PRD 3.1).
+RAW_MIN_ZOOM = 14
+
+_CLUSTERS_SQL = text(
+    "select cell_x, cell_y, lon, lat, count_all, count_verified, count_free, "
+    "rep_all, rep_verified, rep_free "
+    "from pin_clusters(CAST(:min_lon AS double precision), CAST(:min_lat AS double precision), "
+    "CAST(:max_lon AS double precision), CAST(:max_lat AS double precision), CAST(:zoom AS integer))"
+)
+
+
+async def get_pin_clusters(
+    session: AsyncSession,
+    min_lon: float,
+    min_lat: float,
+    max_lon: float,
+    max_lat: float,
+    zoom: int,
+) -> list[dict]:
+    """
+    Grid clusters for a viewport below street zoom. All bucketing, counting
+    and representative selection happens in pin_clusters() (PostGIS); this
+    only reshapes rows for the response.
+    """
+    rows = await session.execute(
+        _CLUSTERS_SQL,
+        {"min_lon": min_lon, "min_lat": min_lat, "max_lon": max_lon, "max_lat": max_lat, "zoom": zoom},
+    )
+    return [
+        {
+            "cell": f"{zoom}/{r.cell_x}/{r.cell_y}",
+            "lon": r.lon,
+            "lat": r.lat,
+            "counts": {"all": r.count_all, "verified": r.count_verified, "free": r.count_free},
+            "representatives": {"all": r.rep_all, "verified": r.rep_verified, "free": r.rep_free},
+        }
+        for r in rows
+    ]
 
 
 async def get_pin_detail(session: AsyncSession, pin_id: str) -> dict | None:

@@ -31,6 +31,49 @@ class PinSummary(BaseModel):
     to_street: str | None
 
 
+class ClusterRepresentative(BaseModel):
+    """The pin a cluster bubble shows for one filter: its tier drives the
+    morphology, its status the color. Highest priority wins (Tier 3, Tier 1, Tier 2)."""
+
+    id: UUID
+    kind: PinKind
+    tier: int
+    status: Status
+    anchor_lon: float
+    anchor_lat: float
+    last_verified_at: datetime | None
+
+
+class ClusterCounts(BaseModel):
+    all: int
+    verified: int  # Tier 1 only
+    free: int  # status == "available"
+
+
+class ClusterRepresentatives(BaseModel):
+    # None when no member of the cell passes that filter (counts is 0).
+    all: ClusterRepresentative
+    verified: ClusterRepresentative | None
+    free: ClusterRepresentative | None
+
+
+class PinCluster(BaseModel):
+    # Stable id of the grid cell at this zoom; use as the Mapbox feature id.
+    cell: str
+    # Mean of member anchors: where to draw the bubble.
+    lon: float
+    lat: float
+    counts: ClusterCounts
+    representatives: ClusterRepresentatives
+
+
+class PinClusterResponse(BaseModel):
+    zoom: int
+    # At this zoom and above, use GET /pins (raw features) instead.
+    raw_min_zoom: int
+    clusters: list[PinCluster]
+
+
 class ReviewOut(BaseModel):
     id: UUID
     photo_url: str | None

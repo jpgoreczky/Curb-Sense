@@ -117,5 +117,6 @@ engine_settings = Table(
     Column("conflict_decay_window", Interval),
     Column("quorum_min_votes", Integer),
     Column("quorum_margin", Numeric),
+    Column("cluster_cell_px", Integer),
     Column("updated_at", DateTime(timezone=True)),
 )

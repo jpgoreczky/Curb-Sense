@@ -9,6 +9,7 @@ from schemas import (
     ConflictResolveRequest,
     ConflictVoteRequest,
     PinCreateRequest,
+    PinClusterResponse,
     PinDetail,
     PinSummary,
     ReviewCreateRequest,
@@ -20,9 +21,36 @@ from services.ingestion import (
     ingest_tier2,
     resolve_conflict,
 )
-from services.parking import add_review, get_pin_detail, get_pins_in_bbox
+from services.parking import RAW_MIN_ZOOM, add_review, get_pin_clusters, get_pin_detail, get_pins_in_bbox
 
 router = APIRouter()
+
+
+# Guards against a huge bbox at a high zoom (thousands of cells). A phone
+# viewport is roughly 8 x 16 cells at 64 px; this leaves room for tablets
+# and prefetching neighbouring areas.
+MAX_CLUSTER_SPAN_DEG_AT_Z0 = 360.0 * 4
+
+
+# Must be registered before /pins/{pin_id}, or "clusters" parses as a UUID.
+@router.get("/pins/clusters", response_model=PinClusterResponse)
+async def list_pin_clusters(
+    min_lon: float = Query(..., ge=-180, le=180),
+    min_lat: float = Query(..., ge=-90, le=90),
+    max_lon: float = Query(..., ge=-180, le=180),
+    max_lat: float = Query(..., ge=-90, le=90),
+    zoom: int = Query(..., ge=0, lt=RAW_MIN_ZOOM, description="Floor of the Mapbox camera zoom"),
+    session: AsyncSession = Depends(get_db_session),
+):
+    if min_lon >= max_lon or min_lat >= max_lat:
+        raise HTTPException(status_code=400, detail="Bounding box min must be less than max")
+    # Request-size check only (no spatial logic): the widest bbox allowed
+    # shrinks by half per zoom level, like the visible area does.
+    max_span = MAX_CLUSTER_SPAN_DEG_AT_Z0 / (2**zoom)
+    if (max_lon - min_lon) > max_span or (max_lat - min_lat) > max_span:
+        raise HTTPException(status_code=400, detail=f"Bounding box too large for zoom {zoom}")
+    clusters = await get_pin_clusters(session, min_lon, min_lat, max_lon, max_lat, zoom)
+    return {"zoom": zoom, "raw_min_zoom": RAW_MIN_ZOOM, "clusters": clusters}
 
 
 @router.get("/pins", response_model=list[PinSummary])

@@ -14,7 +14,8 @@ update engine_settings set
   segment_snap_radius_m = 20,
   conflict_decay_window = interval '48 hours',
   quorum_min_votes = 3,
-  quorum_margin = 0.75;
+  quorum_margin = 0.75,
+  cluster_cell_px = 64;
 """
 
 
