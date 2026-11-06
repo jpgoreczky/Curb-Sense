@@ -1,39 +1,47 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import get_current_user_id
+from auth import get_current_user_id, require_ops_user_id
 from db import get_db_session
-from schemas import ConflictResolveRequest, PinCreateRequest, PinDetail, PinSummary, ReviewCreateRequest
-from services.ingestion import ingest_tier2, resolve_conflict
+from schemas import (
+    ConflictResolveRequest,
+    ConflictVoteRequest,
+    PinCreateRequest,
+    PinDetail,
+    PinSummary,
+    ReviewCreateRequest,
+)
+from services.ingestion import (
+    ConflictNotFound,
+    ConflictNotOpen,
+    cast_conflict_vote,
+    ingest_tier2,
+    resolve_conflict,
+)
 from services.parking import add_review, get_pin_detail, get_pins_in_bbox
-
-from uuid import UUID
 
 router = APIRouter()
 
 
-def _validate_uuid(value: str, field_name: str = "id") -> None:
-    try:
-        UUID(value)
-    except ValueError:
-        raise HTTPException(status_code=400, detail=f"Invalid {field_name} format")
-
-
 @router.get("/pins", response_model=list[PinSummary])
 async def list_pins(
-    min_lon: float = Query(...),
-    min_lat: float = Query(...),
-    max_lon: float = Query(...),
-    max_lat: float = Query(...),
+    min_lon: float = Query(..., ge=-180, le=180),
+    min_lat: float = Query(..., ge=-90, le=90),
+    max_lon: float = Query(..., ge=-180, le=180),
+    max_lat: float = Query(..., ge=-90, le=90),
+    limit: int = Query(500, ge=1, le=2000),
     session: AsyncSession = Depends(get_db_session),
 ):
-    return await get_pins_in_bbox(session, min_lon, min_lat, max_lon, max_lat)
+    if min_lon >= max_lon or min_lat >= max_lat:
+        raise HTTPException(status_code=400, detail="Bounding box min must be less than max")
+    return await get_pins_in_bbox(session, min_lon, min_lat, max_lon, max_lat, limit)
 
 
 @router.get("/pins/{pin_id}", response_model=PinDetail)
-async def get_pin(pin_id: str, session: AsyncSession = Depends(get_db_session)):
-    _validate_uuid(pin_id, "pin_id")
-    pin = await get_pin_detail(session, pin_id)
+async def get_pin(pin_id: UUID, session: AsyncSession = Depends(get_db_session)):
+    pin = await get_pin_detail(session, str(pin_id))
     if pin is None:
         raise HTTPException(status_code=404, detail="Pin not found")
     return pin
@@ -61,34 +69,51 @@ async def create_pin(
 
 @router.post("/pins/{pin_id}/reviews")
 async def create_review(
-    pin_id: str,
+    pin_id: UUID,
     payload: ReviewCreateRequest,
     session: AsyncSession = Depends(get_db_session),
     user_id: str = Depends(get_current_user_id),
 ):
-    _validate_uuid(pin_id, "pin_id")
-    existing = await get_pin_detail(session, pin_id)
+    existing = await get_pin_detail(session, str(pin_id))
     if existing is None:
         raise HTTPException(status_code=404, detail="Pin not found")
-    return await add_review(session, pin_id, user_id, payload.review_text)
+    return await add_review(session, str(pin_id), user_id, payload.review_text)
+
+
+@router.post("/conflicts/{conflict_id}/votes")
+async def vote_on_conflict(
+    conflict_id: UUID,
+    payload: ConflictVoteRequest,
+    session: AsyncSession = Depends(get_db_session),
+    user_id: str = Depends(get_current_user_id),
+):
+    try:
+        return await cast_conflict_vote(
+            session, conflict_id=str(conflict_id), user_id=user_id, supports=payload.supports
+        )
+    except ConflictNotFound:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+    except ConflictNotOpen:
+        raise HTTPException(status_code=409, detail="Conflict is no longer open")
 
 
 @router.post("/conflicts/{conflict_id}/resolve")
 async def resolve_conflict_route(
-    conflict_id: str,
+    conflict_id: UUID,
     payload: ConflictResolveRequest,
     session: AsyncSession = Depends(get_db_session),
-    user_id: str = Depends(get_current_user_id),
+    ops_user_id: str = Depends(require_ops_user_id),
 ):
-    _validate_uuid(conflict_id, "conflict_id")
     try:
         return await resolve_conflict(
             session,
-            conflict_id=conflict_id,
+            conflict_id=str(conflict_id),
             resolution=payload.resolution,
-            resolved_by=user_id,
+            resolved_by=ops_user_id,
             resulting_status=payload.resulting_status,
             resulting_restrictions=payload.resulting_restrictions,
         )
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except ConflictNotFound:
+        raise HTTPException(status_code=404, detail="Conflict not found")
+    except ConflictNotOpen:
+        raise HTTPException(status_code=409, detail="Conflict is no longer open")

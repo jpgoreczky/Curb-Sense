@@ -9,14 +9,17 @@ header) automatically, so this never needs to store or manage a shared
 secret.
 
 The JWKS client is constructed lazily, not at module import time — CI's
-placeholder SUPABASE_URL (see BACK-2.4's CI fix) doesn't point to a real
-Supabase project, and no test currently exercises an authenticated route,
-so eager construction would mean a real network call against a fake URL
-during test collection. Lazy construction means it only matters the first
-time an authenticated request actually comes in.
+placeholder SUPABASE_URL doesn't point to a real Supabase project, so eager
+construction would mean a network call against a fake URL during test
+collection.
+
+Ops role: set `app_metadata.role = "ops"` on the user with the service-role
+key (Admin API). app_metadata is only writable server-side; never use
+user_metadata for authorization, since users can edit it themselves.
 """
 
 from functools import lru_cache
+from typing import Any
 
 import jwt
 from fastapi import Depends, HTTPException
@@ -35,9 +38,9 @@ def _get_jwks_client() -> PyJWKClient:
     return PyJWKClient(jwks_uri)
 
 
-async def get_current_user_id(
+async def get_current_claims(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-) -> str:
+) -> dict[str, Any]:
     token = credentials.credentials
     try:
         signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
@@ -50,8 +53,17 @@ async def get_current_user_id(
     except jwt.PyJWTError as e:
         raise HTTPException(status_code=401, detail=f"Invalid or expired token: {e}")
 
-    user_id = payload.get("sub")
-    if user_id is None:
+    if payload.get("sub") is None:
         raise HTTPException(status_code=401, detail="Token missing subject claim")
+    return payload
 
-    return user_id
+
+async def get_current_user_id(claims: dict[str, Any] = Depends(get_current_claims)) -> str:
+    return claims["sub"]
+
+
+async def require_ops_user_id(claims: dict[str, Any] = Depends(get_current_claims)) -> str:
+    role = (claims.get("app_metadata") or {}).get("role")
+    if role != "ops":
+        raise HTTPException(status_code=403, detail="Ops role required")
+    return claims["sub"]
