@@ -1,5 +1,18 @@
 from geoalchemy2 import Geography
-from sqlalchemy import Column, MetaData, Table, DateTime, Numeric, SmallInteger, String
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    Integer,
+    Interval,
+    MetaData,
+    Numeric,
+    SmallInteger,
+    String,
+    Table,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 metadata = MetaData()
@@ -9,13 +22,41 @@ parking_locations = Table(
     metadata,
     Column("id", UUID),
     Column("geom", Geography(srid=4326)),
+    Column("curb_side", String),
+    Column("street_name", String),
+    Column("from_street", String),
+    Column("to_street", String),
+    Column("osm_way_id", BigInteger),
     Column("tier", SmallInteger),
     Column("status", String),
     Column("restrictions", JSONB),
     Column("last_verified_at", DateTime(timezone=True)),
     Column("municipal_feed_record_id", UUID),
+    Column("feed_claim", JSONB),  # last {status, restrictions} a feed asserted
+    Column("display_priority", SmallInteger),  # generated, read-only
     Column("created_at", DateTime(timezone=True)),
     Column("updated_at", DateTime(timezone=True)),
+)
+
+# Read-only view (see migration 20261106050000). Anchors + GeoJSON computed in PostGIS.
+pin_features = Table(
+    "pin_features",
+    metadata,
+    Column("id", UUID),
+    Column("kind", String),
+    Column("anchor_lon", Float),
+    Column("anchor_lat", Float),
+    Column("geometry", JSONB),
+    Column("geom", Geography(srid=4326)),
+    Column("curb_side", String),
+    Column("tier", SmallInteger),
+    Column("status", String),
+    Column("restrictions", JSONB),
+    Column("last_verified_at", DateTime(timezone=True)),
+    Column("display_priority", SmallInteger),
+    Column("street_name", String),
+    Column("from_street", String),
+    Column("to_street", String),
 )
 
 municipal_feed_records = Table(
@@ -51,8 +92,30 @@ conflicts = Table(
     Column("tier2_snapshot", JSONB),
     Column("status", String),
     Column("resolution", String),
+    Column("resolution_source", String),
     Column("resolved_by", UUID),
     Column("opened_at", DateTime(timezone=True)),
     Column("resolved_at", DateTime(timezone=True)),
     Column("decay_deadline", DateTime(timezone=True)),
+)
+
+conflict_votes = Table(
+    "conflict_votes",
+    metadata,
+    Column("conflict_id", UUID),
+    Column("user_id", UUID),
+    Column("supports", String),
+    Column("created_at", DateTime(timezone=True)),
+)
+
+engine_settings = Table(
+    "engine_settings",
+    metadata,
+    Column("id", Boolean),
+    Column("point_match_radius_m", Float),
+    Column("segment_snap_radius_m", Float),
+    Column("conflict_decay_window", Interval),
+    Column("quorum_min_votes", Integer),
+    Column("quorum_margin", Numeric),
+    Column("updated_at", DateTime(timezone=True)),
 )
